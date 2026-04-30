@@ -1,0 +1,67 @@
+
+C:\Users\Shanmukha Bharadhwaj\OneDrive\Desktop\projects mine\net-banking-app\src\pages\Dashboard.jsx
+  53:7  error  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+  51 |   useEffect(() => {
+  52 |     if (user) {
+> 53 |       fetchData();
+     |       ^^^^^^^^^ Avoid calling setState() directly within an effect
+  54 |     }
+  55 |   }, [user, fetchData]);
+  56 |  react-hooks/set-state-in-effect
+
+C:\Users\Shanmukha Bharadhwaj\OneDrive\Desktop\projects mine\net-banking-app\src\pages\Loans.jsx
+   61:5   error    Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+  59 |
+  60 |   useEffect(() => {
+> 61 |     fetchLoans();
+     |     ^^^^^^^^^^ Avoid calling setState() directly within an effect
+  62 |     // eslint-disable-next-line react-hooks/set-state-in-effect
+  63 |   }, [fetchLoans]);
+  64 |  react-hooks/set-state-in-effect
+   62:5   warning  Unused eslint-disable directive (no problems were reported from 'react-hooks/set-state-in-effect')
+  162:52  error    Error: Cannot call impure function during render
+
+`Date.now` is an impure function. Calling an impure function can produce unstable results that update unpredictably when the component happens to re-render. (https://react.dev/reference/rules/components-and-hooks-must-be-pure#components-and-hooks-must-be-idempotent).
+
+  160 |
+  161 |       // 5. Record transactions
+> 162 |       const refId = 'LNA' + Math.floor(100000000 + Date.now() % 900000000);
+      |                                                    ^^^^^^^^^^ Cannot call impure function
+  163 |       await supabase.from('transactions').insert([
+  164 |         {
+  165 |           user_id: lenderAcc.user_id,                                                                                                                                                                                                                                                                  react-hooks/purity
+
+C:\Users\Shanmukha Bharadhwaj\OneDrive\Desktop\projects mine\net-banking-app\src\pages\TransactionHistory.jsx
+  33:7  error  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+  31 |   useEffect(() => {
+  32 |     if (user) {
+> 33 |       fetchTransactions();
+     |       ^^^^^^^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  34 |     }
+  35 |   }, [user, fetchTransactions]);
+  36 |  react-hooks/set-state-in-effect
+
+✖ 5 problems (4 errors, 1 warning)
+  0 errors and 1 warning potentially fixable with the `--fix` option.
+
