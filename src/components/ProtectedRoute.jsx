@@ -1,6 +1,7 @@
 
 import { Navigate, Outlet } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import LockScreen from './LockScreen';
 
 export default function ProtectedRoute() {
   const { user } = useAuth();
@@ -9,5 +10,9 @@ export default function ProtectedRoute() {
     return <Navigate to="/login" replace />;
   }
 
-  return <Outlet />;
+  return (
+    <LockScreen>
+      <Outlet />
+    </LockScreen>
+  );
 }

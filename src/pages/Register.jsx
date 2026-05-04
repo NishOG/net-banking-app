@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
-import { Wallet, Mail, Lock, ArrowRight, Loader2, CheckCircle2 } from 'lucide-react';
+import { Wallet, Mail, Lock, ArrowRight, Loader2, CheckCircle2, User } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 export default function Register() {
   const navigate = useNavigate();
+  const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -26,34 +27,44 @@ export default function Register() {
 
     try {
       // 1. Sign up user
-      const { data: authData, error: authError } = await supabase.auth.signUp({
+      const { data, error: authError } = await supabase.auth.signUp({
         email,
         password,
+        options: {
+          data: {
+            full_name: fullName
+          }
+        }
       });
 
       if (authError) throw authError;
 
-      // 2. Create account record
-      const accountNumber = Math.floor(1000000000 + Math.random() * 9000000000).toString();
-      const initialBalance = 10000;
+      // 2. Insert into users table to prevent NULL email issue
+      if (data?.user) {
+        const { error: dbError } = await supabase.from('users').upsert({
+          id: data.user.id,
+          email: data.user.email,
+          full_name: fullName
+        });
+        
+        if (dbError) {
+          console.error("Error creating user profile:", dbError);
+        }
+      }
 
-      const { error: accountError } = await supabase
-        .from('accounts')
-        .insert([{
-          user_id: authData.user.id,
-          account_number: accountNumber,
-          balance: initialBalance
-        }]);
-
-      if (accountError) throw accountError;
+      // Account creation is now handled in AddAccount.jsx after login
 
       setSuccess(true);
       setTimeout(() => {
-        navigate('/');
+        navigate('/setup-security');
       }, 2000);
 
     } catch (err) {
-      setError(err.message);
+      if (err.message && err.message.includes('Lock')) {
+        window.location.reload();
+      } else {
+        setError(err.message);
+      }
     } finally {
       setLoading(false);
     }
@@ -105,7 +116,7 @@ export default function Register() {
                 <CheckCircle2 className="h-8 w-8 text-secondary" />
               </div>
               <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-2">Account Created!</h3>
-              <p className="text-gray-500 dark:text-gray-400">Redirecting you to dashboard...</p>
+              <p className="text-gray-500 dark:text-gray-400">Redirecting to security setup...</p>
             </motion.div>
           ) : (
             <form className="space-y-6" onSubmit={handleRegister}>
@@ -114,6 +125,25 @@ export default function Register() {
                   <span className="block sm:inline">{error}</span>
                 </div>
               )}
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  Full Name
+                </label>
+                <div className="mt-2 relative rounded-xl shadow-sm">
+                  <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                    <User className="h-5 w-5 text-gray-400 dark:text-gray-500" />
+                  </div>
+                  <input
+                    type="text"
+                    required
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    className="block w-full pl-11 pr-4 py-3 bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-primary focus:border-transparent text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 transition-all"
+                    placeholder="John Doe"
+                  />
+                </div>
+              </div>
               
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">

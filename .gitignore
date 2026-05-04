@@ -24,3 +24,17 @@ dist-ssr
 *.sw?
 
 .vercel
+
+# Environment variables - NEVER commit these
+.env
+.env.local
+.env.*.local
+.env.production
+.env.development
+
+# Temp / audit files
+lint-results.json
+lint-results.txt
+lint-src.txt
+check_app.js
+dev-dist

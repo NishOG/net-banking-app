@@ -109,9 +109,6 @@ export default function Loans() {
 
       if (insertError) throw insertError;
 
-      // Send email notification to borrower
-
-      
       await supabase.functions.invoke('send-transaction-email', {
         body: {
           emailType: 'loan_request',

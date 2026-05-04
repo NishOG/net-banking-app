@@ -8,26 +8,23 @@ export default function InstallPrompt() {
 
   useEffect(() => {
     const handler = (e) => {
-      // Prevent the mini-infobar from appearing on mobile
       e.preventDefault();
-      // Stash the event so it can be triggered later.
       setDeferredPrompt(e);
-      
-      // Optionally, wait a bit before showing the prompt
       setTimeout(() => setShowPrompt(true), 3000);
     };
 
-    window.addEventListener('beforeinstallprompt', handler);
-
-    // Check if app is already installed
-    window.addEventListener('appinstalled', () => {
+    const installedHandler = () => {
       setShowPrompt(false);
       setDeferredPrompt(null);
       console.log('PWA was installed');
-    });
+    };
+
+    window.addEventListener('beforeinstallprompt', handler);
+    window.addEventListener('appinstalled', installedHandler);
 
     return () => {
       window.removeEventListener('beforeinstallprompt', handler);
+      window.removeEventListener('appinstalled', installedHandler);
     };
   }, []);
 

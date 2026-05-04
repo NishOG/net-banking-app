@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { Send, User, FileText, CheckCircle2, ScanLine, X } from 'lucide-react';
-import { AnimatePresence } from 'framer-motion';
 import { Html5QrcodeScanner } from 'html5-qrcode';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
@@ -148,9 +147,8 @@ export default function FundTransfer() {
       
       // Hook into Auto-Repay
       // The recipient balance just went up. Check if they have active auto-repay loans
-      // Note: We don't await this so it doesn't block the UI update
-      const { data: recipientUser } = await supabase.auth.admin?.getUserById?.(recipientAcc.user_id) || {};
-      processAutoRepayment(formData.recipientAccount, recipientUser?.user?.email || '');
+      // Note: We pass empty string for email since admin API is not available client-side
+      processAutoRepayment(formData.recipientAccount, '');
 
       setStep(2);
     } catch (err) {

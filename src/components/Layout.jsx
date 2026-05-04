@@ -9,7 +9,10 @@ import {
   Wallet,
   Sun,
   Moon,
-  Handshake
+  Handshake,
+  Headphones,
+  HelpCircle,
+  Settings
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
@@ -22,12 +25,14 @@ const NAVIGATION = [
   { name: 'Transactions', href: '/transactions', icon: History },
   { name: 'Loans', href: '/loans', icon: Handshake },
   { name: 'Bill Payments', href: '/bills', icon: Receipt },
+  { name: 'Help & Support', href: '/support', icon: Headphones },
+  { name: 'Settings', href: '/settings', icon: Settings },
 ];
 
 export default function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, userProfile, displayName } = useAuth();
   const { isDarkMode, toggleTheme } = useTheme();
 
   const handleLogout = async () => {
@@ -80,14 +85,16 @@ export default function Layout() {
               {isDarkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
             </button>
           </div>
-          <div className="flex items-center px-4 py-3 mb-4 rounded-xl bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700/50 transition-colors duration-200">
-            <div className="h-8 w-8 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold">
-              {user?.email?.charAt(0).toUpperCase() || 'U'}
+          <Link to="/settings" className="flex items-center px-4 py-3 mb-4 rounded-xl bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700/50 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors duration-200 cursor-pointer group">
+            <div className="h-8 w-8 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold group-hover:bg-primary/30 transition-colors">
+              {displayName.charAt(0).toUpperCase()}
             </div>
             <div className="ml-3 truncate">
-              <p className="text-sm font-medium text-gray-900 dark:text-white truncate">{user?.email}</p>
+              <p className="text-sm font-medium text-gray-900 dark:text-white truncate group-hover:text-primary transition-colors">
+                {displayName}
+              </p>
             </div>
-          </div>
+          </Link>
           <button
             onClick={handleLogout}
             className="flex w-full items-center px-4 py-3 text-sm font-medium text-gray-500 dark:text-gray-400 rounded-xl hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-500/10 dark:hover:text-red-500 transition-colors"
@@ -102,10 +109,14 @@ export default function Layout() {
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Mobile Header */}
         <header className="h-16 flex md:hidden items-center justify-between px-4 bg-white dark:bg-surface border-b border-gray-200 dark:border-gray-800 transition-colors duration-200">
-          <div className="flex items-center">
-            <Wallet className="h-6 w-6 text-primary" />
-            <span className="ml-2 text-lg font-bold text-gray-900 dark:text-white">Qubix Bank</span>
-          </div>
+          <Link to="/settings" className="flex items-center group">
+            <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-sm mr-2 group-hover:bg-primary/20 transition-colors">
+              {displayName.charAt(0).toUpperCase()}
+            </div>
+            <span className="text-lg font-bold text-gray-900 dark:text-white truncate max-w-[150px] group-hover:text-primary transition-colors">
+              {displayName.split(' ')[0]}
+            </span>
+          </Link>
           <div className="flex items-center space-x-2">
             <button onClick={toggleTheme} className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-white">
               {isDarkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
@@ -144,6 +155,15 @@ export default function Layout() {
             <Outlet />
           </div>
         </div>
+        
+        {/* Floating Help Button */}
+        <Link
+          to="/support"
+          className="fixed bottom-20 md:bottom-8 right-4 md:right-8 bg-primary text-white p-4 rounded-full shadow-lg hover:bg-primary/90 hover:scale-105 transition-all z-50 flex items-center justify-center group"
+          title="Help & Support"
+        >
+          <HelpCircle className="h-6 w-6" />
+        </Link>
       </main>
     </div>
   );
