@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Shield, Smartphone, Loader2, Lock, Fingerprint, ArrowRight } from 'lucide-react';
+import { Shield, Lock, Loader2, Fingerprint } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export default function SetupSecurity() {

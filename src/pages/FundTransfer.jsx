@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, User, FileText, CheckCircle2, ScanLine, X } from 'lucide-react';
+import { Send, User, FileText, CheckCircle2, ScanLine, X, Loader2 } from 'lucide-react';
 import { Html5QrcodeScanner } from 'html5-qrcode';
+import { Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { processAutoRepayment } from '../utils/loanHelpers';
 
 export default function FundTransfer() {
-  const { user, account, refreshAccount } = useAuth();
+  const { user, account, accounts, refreshAccount, loading: authLoading } = useAuth();
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -18,6 +19,42 @@ export default function FundTransfer() {
   });
   const [referenceId, setReferenceId] = useState('');
   const [showScanner, setShowScanner] = useState(false);
+  const [recipientInfo, setRecipientInfo] = useState(null);
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [recentRecipients, setRecentRecipients] = useState([]);
+
+  useEffect(() => {
+    const verifyAccount = async () => {
+      const accNum = formData.recipientAccount.trim();
+      if (accNum.length === 10) {
+        setIsVerifying(true);
+        setError(null);
+        try {
+          const { data, error: fetchError } = await supabase
+            .from('accounts')
+            .select('nickname, account_type')
+            .eq('account_number', accNum)
+            .single();
+          
+          if (fetchError || !data) {
+            setRecipientInfo(null);
+            setError('Account not found');
+          } else {
+            setRecipientInfo(data);
+          }
+        } catch {
+          setRecipientInfo(null);
+        } finally {
+          setIsVerifying(false);
+        }
+      } else {
+        setRecipientInfo(null);
+      }
+    };
+
+    const timer = setTimeout(verifyAccount, 500);
+    return () => clearTimeout(timer);
+  }, [formData.recipientAccount]);
 
   useEffect(() => {
     if (showScanner) {
@@ -28,7 +65,17 @@ export default function FundTransfer() {
       }, false);
       
       scanner.render((decodedText) => {
-        setFormData(prev => ({ ...prev, recipientAccount: decodedText }));
+        // Support qubix:ACCOUNT:AMOUNT format
+        if (decodedText.startsWith('qubix:')) {
+          const [, account, amount] = decodedText.split(':');
+          setFormData(prev => ({ 
+            ...prev, 
+            recipientAccount: account || '', 
+            amount: amount || prev.amount 
+          }));
+        } else {
+          setFormData(prev => ({ ...prev, recipientAccount: decodedText }));
+        }
         setShowScanner(false);
         scanner.clear();
       }, () => {
@@ -47,112 +94,95 @@ export default function FundTransfer() {
     setError(null);
 
     const amountNum = Number(formData.amount);
+    const recipientAccNum = formData.recipientAccount.trim();
 
     if (amountNum <= 0) {
-      setError('Amount must be greater than zero.');
+      setError('Invalid amount');
+      setLoading(false);
+      return;
+    }
+
+    if (recipientAccNum.length !== 10) {
+      setError('Account not found');
       setLoading(false);
       return;
     }
 
     if (!account) {
-      setError('Your account data is not loaded yet. Please try again.');
+      setError('Account not found');
       setLoading(false);
       return;
     }
 
     if (amountNum > Number(account.balance)) {
-      setError('Insufficient funds.');
+      setError('Insufficient balance');
       setLoading(false);
       return;
     }
 
-    if (formData.recipientAccount === account.account_number) {
-      setError('You cannot transfer to your own account.');
-      setLoading(false);
-      return;
+    if (recipientAccNum === account.account_number) {
+      // Allow internal transfer but skip the recipient check logic since we already have the account
     }
 
     try {
-      // 1. Find recipient
+      // b) Recipient account exists in database
       const { data: recipientAcc, error: recipientError } = await supabase
         .from('accounts')
         .select('*')
-        .eq('account_number', formData.recipientAccount)
+        .eq('account_number', recipientAccNum)
         .single();
 
       if (recipientError || !recipientAcc) {
-        throw new Error('Recipient account not found.');
+        throw new Error('Account not found');
       }
 
-      // 2. Deduct from sender
-      const newSenderBalance = Number(account.balance) - amountNum;
-      const { error: deductError } = await supabase
-        .from('accounts')
-        .update({ balance: newSenderBalance })
-        .eq('id', account.id);
-
-      if (deductError) throw new Error('Failed to deduct from sender.');
-
-      // 3. Add to recipient
-      const newRecipientBalance = Number(recipientAcc.balance) + amountNum;
-      const { error: addError } = await supabase
-        .from('accounts')
-        .update({ balance: newRecipientBalance })
-        .eq('id', recipientAcc.id);
-
-      if (addError) throw new Error('Failed to transfer to recipient.');
-
-      // 4. Record transactions
       const refId = 'TRX' + Math.floor(100000000 + Math.random() * 900000000);
       setReferenceId(refId);
 
-      const senderTx = {
-        user_id: user.id,
-        type: 'Transfer',
-        amount: amountNum,
-        description: formData.remarks || `Transfer to ${formData.recipientAccount}`,
-        category: 'Transfer',
-        reference_id: refId
-      };
+      const newSenderBalance = Number(account.balance) - amountNum;
+      const newRecipientBalance = Number(recipientAcc.balance) + amountNum;
 
-      const recipientTx = {
-        user_id: recipientAcc.user_id,
-        type: 'Income',
-        amount: amountNum,
-        description: `Transfer from ${account.account_number}`,
-        category: 'Transfer',
-        reference_id: refId
-      };
-
-      await supabase.from('transactions').insert([senderTx, recipientTx]);
-
-      // Call Edge Function for email notification
-      const { error: fnError } = await supabase.functions.invoke('send-transaction-email', {
-        body: {
-          senderEmail: user.email,
-          recipientAccountNumber: formData.recipientAccount,
-          amount: amountNum,
-          senderBalance: newSenderBalance,
-          recipientBalance: newRecipientBalance,
-          date: new Date().toLocaleString(),
-          referenceId: refId
-        }
+      // 3. Execute transfer instantly via RPC (Bypasses RLS using SECURITY DEFINER)
+      const { data: rpcData, error: rpcError } = await supabase.rpc('transfer_funds', {
+        p_sender_account: account.account_number,
+        p_recipient_account: recipientAccNum,
+        p_amount: amountNum
       });
-      
-      if (fnError) {
-        console.error('Edge function failed:', fnError);
-      }
 
-      await refreshAccount();
+      if (rpcError) throw new Error(rpcError.message);
+      if (rpcData?.status === 'error') throw new Error(rpcData.message);
+
+      // 3. Fire off notifications and background tasks without blocking the UI
+      supabase
+        .from('users')
+        .select('email')
+        .eq('id', recipientAcc.user_id)
+        .single()
+        .then(({ data: recipientUser }) => {
+          supabase.functions.invoke('send-transaction-email', {
+            body: {
+              senderEmail: user.email,
+              recipientEmail: recipientUser?.email,
+              recipientAccountNumber: formData.recipientAccount,
+              amount: amountNum,
+              senderBalance: newSenderBalance,
+              recipientBalance: newRecipientBalance,
+              date: new Date().toLocaleString(),
+              referenceId: refId
+            }
+          }).catch(console.error);
+        })
+        .catch(console.error);
+
+      // Refresh sender account balance in background
+      refreshAccount();
       
       // Hook into Auto-Repay
-      // The recipient balance just went up. Check if they have active auto-repay loans
-      // Note: We pass empty string for email since admin API is not available client-side
       processAutoRepayment(formData.recipientAccount, '');
 
       setStep(2);
     } catch (err) {
-      setError(err.message);
+      setError(err.message || 'Transfer failed');
     } finally {
       setLoading(false);
     }
@@ -163,6 +193,58 @@ export default function FundTransfer() {
     setError(null);
     setStep(1);
   };
+
+  useEffect(() => {
+    const fetchRecent = async () => {
+      try {
+        if (!user || !account?.account_number) return;
+        const { data } = await supabase
+          .from('transactions')
+          .select('to_account, created_at')
+          .eq('from_account', account.account_number)
+          .order('created_at', { ascending: false });
+        
+        if (data) {
+          const unique = [...new Set(data.map(t => t.to_account))]
+            .filter(acc => acc && acc !== account.account_number)
+            .slice(0, 5);
+          setRecentRecipients(unique);
+        }
+      } catch (err) {
+        console.error("Error fetching recent recipients:", err);
+      }
+    };
+    fetchRecent();
+  }, [user, account?.account_number]);
+
+  // Loading state
+  if (authLoading && !account) {
+    return (
+      <div className="flex items-center justify-center min-h-[400px]">
+        <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
+
+  // No accounts case
+  if (!authLoading && accounts && accounts.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[400px] text-center">
+        <div className="bg-white dark:bg-surface rounded-3xl p-10 border border-gray-200 dark:border-gray-800 shadow-xl max-w-md">
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">No Accounts Found</h2>
+          <p className="text-gray-500 dark:text-gray-400 mb-8">
+            You need to create an account before you can transfer funds.
+          </p>
+          <Link 
+            to="/add-account"
+            className="inline-flex items-center justify-center px-6 py-4 border border-transparent rounded-xl shadow-sm text-base font-medium text-white bg-primary hover:bg-primary/90 transition-all w-full"
+          >
+            Create Your First Account
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-2xl mx-auto">
@@ -210,6 +292,52 @@ export default function FundTransfer() {
                     Scan & Pay
                   </button>
                 </label>
+
+                {/* Quick Select for Own Accounts */}
+                {accounts && accounts.length > 1 && account && (
+                  <div className="mb-4">
+                    <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-2 font-bold">Your Other Accounts</p>
+                    <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+                      {accounts.filter(acc => acc.id !== account.id).map(acc => (
+                        <button
+                          key={acc.id}
+                          type="button"
+                          onClick={() => setFormData({ ...formData, recipientAccount: acc.account_number })}
+                          className={`flex-none px-4 py-2 rounded-xl text-xs font-medium transition-all border ${
+                            formData.recipientAccount === acc.account_number 
+                              ? 'bg-primary/10 border-primary text-primary' 
+                              : 'bg-gray-50 dark:bg-gray-900/50 border-gray-200 dark:border-gray-800 text-gray-500 hover:border-gray-300 dark:hover:border-gray-700'
+                          }`}
+                        >
+                          {acc.nickname || acc.account_type} (..{acc.account_number.slice(-4)})
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Recent Recipients */}
+                {recentRecipients && recentRecipients.length > 0 && (
+                  <div className="mb-4">
+                    <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-2 font-bold">Recent Recipients</p>
+                    <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+                      {recentRecipients.map(acc => (
+                        <button
+                          key={acc}
+                          type="button"
+                          onClick={() => setFormData({ ...formData, recipientAccount: acc })}
+                          className={`flex-none px-4 py-2 rounded-xl text-xs font-medium transition-all border ${
+                            formData.recipientAccount === acc 
+                              ? 'bg-secondary/10 border-secondary text-secondary' 
+                              : 'bg-gray-50 dark:bg-gray-900/50 border-gray-200 dark:border-gray-800 text-gray-500 hover:border-gray-300 dark:hover:border-gray-700'
+                          }`}
+                        >
+                          Account ..{acc.slice(-4)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <div className="relative rounded-xl shadow-sm">
                   <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
                     <User className="h-5 w-5 text-gray-400 dark:text-gray-500" />
@@ -222,7 +350,22 @@ export default function FundTransfer() {
                     className="block w-full pl-11 pr-4 py-3 bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-primary focus:border-transparent text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 transition-all"
                     placeholder="Enter 10-digit account number"
                   />
+                  {isVerifying && (
+                    <div className="absolute inset-y-0 right-0 pr-4 flex items-center">
+                      <Loader2 className="h-4 w-4 text-primary animate-spin" />
+                    </div>
+                  )}
                 </div>
+                {recipientInfo && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: -5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="mt-2 flex items-center text-xs font-medium text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-500/10 px-3 py-1.5 rounded-lg border border-green-100 dark:border-green-500/20"
+                  >
+                    <CheckCircle2 className="h-3.5 w-3.5 mr-1.5" />
+                    Recipient: {recipientInfo.nickname || `${recipientInfo.account_type} Account`}
+                  </motion.div>
+                )}
               </div>
 
               <div>
@@ -273,7 +416,7 @@ export default function FundTransfer() {
                   {loading ? (
                     <span className="flex items-center">
                       <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin mr-3" />
-                      Processing...
+                      Transfer processing...
                     </span>
                   ) : (
                     <span className="flex items-center">
@@ -295,7 +438,7 @@ export default function FundTransfer() {
               <div className="absolute inset-0 bg-secondary/20 rounded-full animate-ping" />
               <CheckCircle2 className="h-12 w-12 text-secondary relative z-10" />
             </div>
-            <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">Transfer Successful!</h2>
+            <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">Transfer successful</h2>
             <p className="text-gray-500 dark:text-gray-400 mb-8">
               ₹{parseFloat(formData.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })} has been successfully sent to account {formData.recipientAccount}.
             </p>

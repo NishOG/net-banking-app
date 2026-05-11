@@ -1,4 +1,3 @@
-
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
 import { 
   LayoutDashboard, 
@@ -32,7 +31,7 @@ const NAVIGATION = [
 export default function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { user, userProfile, displayName } = useAuth();
+  const { displayName } = useAuth();
   const { isDarkMode, toggleTheme } = useTheme();
 
   const handleLogout = async () => {

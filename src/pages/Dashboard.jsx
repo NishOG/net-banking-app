@@ -12,22 +12,31 @@ import {
   PlusCircle,
   Wallet,
   Eye,
-  EyeOff
+  EyeOff,
+  Trash2,
+  AlertTriangle,
+  ArrowRight
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { QRCodeSVG } from 'qrcode.react';
 
 export default function Dashboard() {
-  const { user, userProfile, displayName, accounts, account, setAccount } = useAuth();
+  const navigate = useNavigate();
+  const { user, displayName, accounts, account, setAccount, refreshAccount } = useAuth();
   const [recentTransactions, setRecentTransactions] = useState([]);
   const [totalSpent, setTotalSpent] = useState(0);
   const [qrAccount, setQrAccount] = useState(null); // Which account to show QR for
+  const [qrAmount, setQrAmount] = useState(''); // Requested amount
   const [userSettings, setUserSettings] = useState(null);
   const [showBalance, setShowBalance] = useState(() => {
     return localStorage.getItem('showBalance') === 'true';
   });
+  const [accountToDelete, setAccountToDelete] = useState(null);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteError, setDeleteError] = useState(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const toggleBalance = () => {
     const newVal = !showBalance;
@@ -72,6 +81,41 @@ export default function Dashboard() {
       setUserSettings(settingsData);
     }
   }, [user]);
+
+  const handleDeleteAccount = async () => {
+    if (!accountToDelete) return;
+    
+    // Safety check
+    if (Number(accountToDelete.balance) > 0) {
+      setDeleteError("Cannot delete an account with a positive balance. Please transfer funds out first.");
+      return;
+    }
+
+    setIsDeleting(true);
+    setDeleteError(null);
+
+    try {
+      const { error } = await supabase
+        .from('accounts')
+        .delete()
+        .eq('id', accountToDelete.id);
+
+      if (error) throw error;
+
+      await refreshAccount();
+      setShowDeleteModal(false);
+      setAccountToDelete(null);
+
+      // If all accounts deleted, navigate to add-account
+      if (accounts.length <= 1) {
+        navigate('/add-account');
+      }
+    } catch (err) {
+      setDeleteError(err.message || "Failed to delete account. It might have transaction history.");
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -135,12 +179,19 @@ export default function Dashboard() {
             <PlusCircle className="mr-2 h-4 w-4" />
             Add Account
           </Link>
+          <button 
+            onClick={() => setQrAccount(account)}
+            className="inline-flex items-center justify-center px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl shadow-sm text-sm font-medium text-gray-700 dark:text-white bg-white dark:bg-surface hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+          >
+            <QrCode className="mr-2 h-4 w-4" />
+            Receive
+          </button>
           <Link 
             to="/transfer"
             className="inline-flex items-center justify-center px-4 py-2 border border-transparent rounded-xl shadow-sm text-sm font-medium text-white bg-primary hover:bg-primary/90 transition-colors"
           >
             <Send className="mr-2 h-4 w-4" />
-            Transfer Funds
+            Transfer
           </Link>
         </div>
       </div>
@@ -224,6 +275,22 @@ export default function Dashboard() {
                 >
                   <QrCode className="h-5 w-5" />
                 </button>
+                <button 
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setAccountToDelete(acc);
+                    setShowDeleteModal(true);
+                    setDeleteError(null);
+                  }}
+                  className={`p-2 rounded-xl backdrop-blur-sm transition-colors ml-2 ${
+                    account?.id === acc.id 
+                      ? 'bg-white/20 hover:bg-red-500/40 text-white' 
+                      : 'bg-gray-100 dark:bg-gray-800 hover:bg-red-50 dark:hover:bg-red-500/20 text-gray-400 hover:text-red-600'
+                  }`}
+                  title="Delete Account"
+                >
+                  <Trash2 className="h-5 w-5" />
+                </button>
               </div>
 
               <div className="space-y-4 relative z-10">
@@ -239,6 +306,20 @@ export default function Dashboard() {
               </div>
             </motion.div>
           ))}
+
+          {/* Add New Card Placeholder */}
+          <motion.div
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: 0.2 + (accounts?.length || 0) * 0.1 }}
+            className="rounded-2xl p-6 border-2 border-dashed border-gray-200 dark:border-gray-800 hover:border-primary/50 hover:bg-primary/5 transition-all cursor-pointer flex flex-col items-center justify-center group h-[180px]"
+            onClick={() => navigate('/add-account')}
+          >
+            <div className="h-12 w-12 rounded-full bg-gray-100 dark:bg-gray-800 flex items-center justify-center mb-3 group-hover:bg-primary/20 transition-colors">
+              <PlusCircle className="h-6 w-6 text-gray-400 group-hover:text-primary transition-colors" />
+            </div>
+            <p className="text-sm font-medium text-gray-500 group-hover:text-primary transition-colors">Add New Card/Account</p>
+          </motion.div>
         </div>
 
         {/* Recent Transactions (Right Col) */}
@@ -322,14 +403,28 @@ export default function Dashboard() {
                 <QrCode className="h-8 w-8 text-primary" />
               </div>
               
-              <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-2">Scan to Pay</h2>
-              <p className="text-gray-500 dark:text-gray-400 text-sm text-center mb-8">
-                Ask the sender to scan this QR code from their Qubix Bank app to transfer funds directly to your {qrAccount.nickname} account.
+              <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-2">Request Payment</h2>
+              <p className="text-gray-500 dark:text-gray-400 text-sm text-center mb-6">
+                Generate a QR code for your {qrAccount.nickname} account. You can optionally include an amount.
               </p>
 
-              <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-800 mb-6 flex justify-center">
+              <div className="w-full mb-6">
+                <label className="block text-xs font-medium text-gray-500 mb-2 uppercase tracking-wider">Requested Amount (Optional)</label>
+                <div className="relative">
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-medium">₹</span>
+                  <input 
+                    type="number"
+                    value={qrAmount}
+                    onChange={(e) => setQrAmount(e.target.value)}
+                    placeholder="0.00"
+                    className="w-full pl-9 pr-4 py-3 bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-800 rounded-xl focus:ring-2 focus:ring-primary focus:border-transparent text-gray-900 dark:text-white font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="bg-white p-4 rounded-3xl shadow-inner border border-gray-100 dark:border-gray-800 mb-6 flex justify-center">
                 <QRCodeSVG 
-                  value={qrAccount.account_number} 
+                  value={qrAmount ? `qubix:${qrAccount.account_number}:${qrAmount}` : qrAccount.account_number} 
                   size={200}
                   bgColor="#ffffff"
                   fgColor="#1a1a2e"
@@ -341,6 +436,82 @@ export default function Dashboard() {
               <div className="w-full bg-gray-50 dark:bg-gray-800/50 rounded-xl p-4 text-center border border-gray-100 dark:border-gray-800">
                 <p className="text-sm font-medium text-gray-900 dark:text-white">{user?.email}</p>
                 <p className="text-sm font-mono text-gray-500 dark:text-gray-400 mt-1">A/C: {qrAccount.account_number}</p>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Delete Account Confirmation Modal */}
+      <AnimatePresence>
+        {showDeleteModal && accountToDelete && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+          >
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white dark:bg-surface rounded-3xl shadow-2xl p-8 max-w-md w-full relative"
+            >
+              <div className={`h-16 w-16 rounded-2xl flex items-center justify-center mb-6 ${Number(accountToDelete.balance) > 0 ? 'bg-orange-100 text-orange-600' : 'bg-red-100 text-red-600'}`}>
+                <AlertTriangle className="h-8 w-8" />
+              </div>
+              
+              <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-2">
+                {Number(accountToDelete.balance) > 0 ? 'Account Deletion Blocked' : 'Delete Account?'}
+              </h2>
+              
+              <p className="text-gray-500 dark:text-gray-400 text-sm mb-6">
+                {Number(accountToDelete.balance) > 0 
+                  ? `You cannot delete the account "${accountToDelete.nickname || accountToDelete.account_type}" because it has a positive balance of ₹${Number(accountToDelete.balance).toLocaleString()}. Please transfer the funds before closing.`
+                  : `Are you sure you want to permanently delete your "${accountToDelete.nickname || accountToDelete.account_type}" account (${accountToDelete.account_number})? This action cannot be undone.`
+                }
+              </p>
+
+              {deleteError && (
+                <div className="bg-red-50 border border-red-200 text-red-600 text-xs rounded-xl p-3 mb-6">
+                  {deleteError}
+                </div>
+              )}
+
+              <div className="flex flex-col sm:flex-row gap-3">
+                {Number(accountToDelete.balance) > 0 ? (
+                  <>
+                    <button 
+                      onClick={() => setShowDeleteModal(false)}
+                      className="flex-1 px-6 py-3 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-white rounded-xl font-medium transition-colors"
+                    >
+                      Close
+                    </button>
+                    <Link 
+                      to="/transfer"
+                      className="flex-1 px-6 py-3 bg-primary text-white rounded-xl font-medium text-center flex items-center justify-center"
+                    >
+                      Transfer Now <ArrowRight className="ml-2 h-4 w-4" />
+                    </Link>
+                  </>
+                ) : (
+                  <>
+                    <button 
+                      onClick={() => setShowDeleteModal(false)}
+                      className="flex-1 px-6 py-3 bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-white rounded-xl font-medium transition-colors"
+                      disabled={isDeleting}
+                    >
+                      Cancel
+                    </button>
+                    <button 
+                      onClick={handleDeleteAccount}
+                      className="flex-1 px-6 py-3 bg-red-600 hover:bg-red-700 text-white rounded-xl font-medium transition-colors disabled:opacity-50"
+                      disabled={isDeleting}
+                    >
+                      {isDeleting ? 'Deleting...' : 'Delete Account'}
+                    </button>
+                  </>
+                )}
               </div>
             </motion.div>
           </motion.div>

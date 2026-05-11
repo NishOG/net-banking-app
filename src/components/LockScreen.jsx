@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Shield, Fingerprint, Loader2, Lock, ArrowRight, LogOut } from 'lucide-react';
+import { Shield, Fingerprint, Loader2, LogOut } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export default function LockScreen({ children }) {
@@ -12,11 +12,6 @@ export default function LockScreen({ children }) {
   const [pin, setPin] = useState('');
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
-
-  // If no user, or unlocked, just render children
-  if (!user || isUnlocked) {
-    return <>{children}</>;
-  }
 
   // Simple hashing function for PIN (must match SetupSecurity.jsx)
   const hashPIN = async (pinStr) => {
@@ -35,7 +30,6 @@ export default function LockScreen({ children }) {
       const challenge = new Uint8Array(32);
       window.crypto.getRandomValues(challenge);
 
-      // In a real app, this verifies against the server's generated challenge
       const assertion = await navigator.credentials.get({
         publicKey: {
           challenge: challenge,
@@ -57,10 +51,16 @@ export default function LockScreen({ children }) {
 
   // Attempt biometric automatically on mount if enabled
   useEffect(() => {
-    if (userProfile?.biometric_enabled) {
+    if (userProfile?.biometric_enabled && !isUnlocked && user) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       handleBiometricAuth();
     }
-  }, [handleBiometricAuth, userProfile?.biometric_enabled]);
+  }, [handleBiometricAuth, userProfile?.biometric_enabled, isUnlocked, user]);
+
+  // If no user, or unlocked, just render children
+  if (!user || isUnlocked) {
+    return <>{children}</>;
+  }
 
   const handlePinSubmit = async (e) => {
     e.preventDefault();
@@ -75,7 +75,7 @@ export default function LockScreen({ children }) {
         setError("Incorrect PIN. Please try again.");
         setPin('');
       }
-    } catch (err) {
+    } catch {
       setError("An error occurred.");
     } finally {
       setLoading(false);

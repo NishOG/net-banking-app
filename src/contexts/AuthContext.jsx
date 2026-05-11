@@ -93,8 +93,40 @@ export const AuthProvider = ({ children }) => {
       }
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      subscription.unsubscribe();
+    };
   }, [fetchAccount]);
+
+  // Real-time balance updates
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const channel = supabase
+      .channel('account-updates')
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'accounts',
+          filter: `user_id=eq.${user.id}`
+        },
+        (payload) => {
+          // Update the specific account in our local state instantly
+          const updatedAccount = payload.new;
+          setAccounts(prev => prev.map(acc => acc.id === updatedAccount.id ? updatedAccount : acc));
+          
+          // If this is the active account, update it too
+          setAccount(prev => (prev && prev.id === updatedAccount.id) ? updatedAccount : prev);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id]);
 
   const refreshAccount = useCallback(() => fetchAccount(user?.id), [fetchAccount, user]);
 

@@ -1,11 +1,59 @@
-import { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion } from 'framer-motion';
-import { Search, Filter, ArrowUpRight, ArrowDownRight, Download } from 'lucide-react';
+import { Search, Filter, ArrowUpRight, ArrowDownRight, Download, RefreshCw, AlertCircle } from 'lucide-react';
 import clsx from 'clsx';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import jsPDF from 'jspdf';
 import 'jspdf-autotable';
+
+const TransactionItem = React.memo(({ transaction, index }) => {
+  const isIncome = transaction.type === 'Income' || transaction.type === 'Transfer In' || transaction.type === 'Salary Credit';
+  const formattedAmount = `₹${Number(transaction.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+
+  return (
+    <motion.tr 
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: index * 0.05 }}
+      className="hover:bg-gray-50 dark:hover:bg-gray-800/20 transition-colors"
+    >
+      <td className="px-6 py-4 whitespace-nowrap">
+        <div className="flex items-center">
+          <div className="flex-shrink-0 h-10 w-10 rounded-xl bg-gray-50 dark:bg-gray-800 flex items-center justify-center border border-gray-200 dark:border-gray-700">
+            {isIncome ? (
+              <ArrowDownRight className="h-5 w-5 text-secondary" />
+            ) : (
+              <ArrowUpRight className="h-5 w-5 text-gray-400 dark:text-gray-400" />
+            )}
+          </div>
+          <div className="ml-4">
+            <div className="text-sm font-medium text-gray-900 dark:text-white">{transaction.description}</div>
+            <div className="text-sm text-gray-500">{transaction.category}</div>
+          </div>
+        </div>
+      </td>
+      <td className="px-6 py-4 whitespace-nowrap">
+        <div className="text-sm text-gray-700 dark:text-gray-300">{new Date(transaction.created_at).toLocaleDateString()}</div>
+        <div className="text-xs text-gray-400 dark:text-gray-500 font-mono">{transaction.reference_id}</div>
+      </td>
+      <td className="px-6 py-4 whitespace-nowrap">
+        <div className="text-sm text-gray-500 dark:text-gray-400">Account</div>
+        <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-50 dark:bg-green-500/10 text-green-600 dark:text-green-500 mt-1 border border-green-200 dark:border-green-500/20">
+          Completed
+        </span>
+      </td>
+      <td className="px-6 py-4 whitespace-nowrap text-right">
+        <div className={clsx(
+          "text-sm font-bold",
+          isIncome ? "text-secondary" : "text-gray-900 dark:text-white"
+        )}>
+          {isIncome ? '+' : '-'}{formattedAmount}
+        </div>
+      </td>
+    </motion.tr>
+  );
+});
 
 export default function TransactionHistory() {
   const { user, account } = useAuth();
@@ -13,37 +61,72 @@ export default function TransactionHistory() {
   const [filter, setFilter] = useState('All');
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  const fetchTransactions = useCallback(async () => {
-    setLoading(true);
-    const { data, error } = await supabase
-      .from('transactions')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false });
-
-    if (!error && data) {
-      setTransactions(data);
-    }
-    setLoading(false);
-  }, [user]);
+  const accountNumber = account?.account_number;
 
   useEffect(() => {
-    if (user) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      fetchTransactions();
+    let isMounted = true;
+    
+    const fetchData = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const { data, error: fetchError } = await supabase
+          .from('transactions')
+          .select('*')
+          .or(`from_account.eq.${accountNumber},to_account.eq.${accountNumber}`)
+          .order('created_at', { ascending: false });
+        
+        if (fetchError) throw fetchError;
+        if (isMounted) setTransactions(data || []);
+      } catch (err) {
+        if (isMounted) setError("Failed to load transactions. Please try again.");
+      } finally {
+        if (isMounted) setLoading(false);
+      }
+    };
+    
+    if (accountNumber) {
+      fetchData();
+    } else {
+      setLoading(false);
     }
-  }, [user, fetchTransactions]);
+    
+    return () => { isMounted = false; };
+  }, [accountNumber]);
 
-  const filteredTransactions = transactions.filter(t => {
-    const isIncome = t.type === 'Income';
-    const matchesSearch = t.description.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          t.reference_id.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesFilter = filter === 'All' || 
-                         (filter === 'Income' && isIncome) || 
-                         (filter === 'Expense' && !isIncome);
-    return matchesSearch && matchesFilter;
-  });
+  const handleManualRefresh = async () => {
+    if (!accountNumber) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const { data, error: fetchError } = await supabase
+        .from('transactions')
+        .select('*')
+        .or(`from_account.eq.${accountNumber},to_account.eq.${accountNumber}`)
+        .order('created_at', { ascending: false });
+      
+      if (fetchError) throw fetchError;
+      setTransactions(data || []);
+    } catch (err) {
+      setError("Failed to load transactions. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const filteredTransactions = useMemo(() => {
+    return transactions.filter(t => {
+      const isIncome = t.type === 'Income' || t.type === 'Transfer In' || t.type === 'Salary Credit';
+      const matchesSearch = t.description.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                            t.reference_id.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesFilter = filter === 'All' || 
+                           (filter === 'Income' && isIncome) || 
+                           (filter === 'Expense' && !isIncome);
+      return matchesSearch && matchesFilter;
+    });
+  }, [transactions, searchTerm, filter]);
 
   const generatePDF = () => {
     const doc = new jsPDF();
@@ -71,7 +154,7 @@ export default function TransactionHistory() {
     
     // transactions are newest first
     for (const tx of transactions) {
-      const isIncome = tx.type === 'Income';
+      const isIncome = tx.type === 'Income' || tx.type === 'Transfer In' || tx.type === 'Salary Credit';
       const amt = Number(tx.amount);
       
       if (isIncome) totalCredits += amt;
@@ -114,13 +197,24 @@ export default function TransactionHistory() {
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Transaction History</h1>
           <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">View and download your recent activity.</p>
         </div>
-        <button 
-          onClick={generatePDF}
-          className="inline-flex items-center justify-center px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl shadow-sm text-sm font-medium text-gray-700 dark:text-white bg-white dark:bg-surface hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
-        >
-          <Download className="mr-2 h-4 w-4" />
-          Export Statement
-        </button>
+        <div className="flex items-center gap-3">
+          <button 
+            onClick={handleManualRefresh}
+            disabled={loading}
+            className="inline-flex items-center justify-center p-2 border border-gray-200 dark:border-gray-700 rounded-xl shadow-sm text-sm font-medium text-gray-700 dark:text-white bg-white dark:bg-surface hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors disabled:opacity-50"
+            title="Refresh Transactions"
+          >
+            <RefreshCw className={clsx("h-5 w-5", loading && "animate-spin text-primary")} />
+          </button>
+          <button 
+            onClick={generatePDF}
+            disabled={loading || error}
+            className="inline-flex items-center justify-center px-4 py-2 border border-gray-200 dark:border-gray-700 rounded-xl shadow-sm text-sm font-medium text-gray-700 dark:text-white bg-white dark:bg-surface hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors disabled:opacity-50"
+          >
+            <Download className="mr-2 h-4 w-4" />
+            Export Statement
+          </button>
+        </div>
       </div>
 
       <div className="bg-white dark:bg-surface rounded-2xl border border-gray-200 dark:border-gray-800/60 shadow-sm dark:shadow-xl overflow-hidden">
@@ -159,92 +253,70 @@ export default function TransactionHistory() {
         </div>
 
         <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-800">
-            <thead className="bg-gray-50 dark:bg-gray-900/30">
-              <tr>
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                  Transaction
-                </th>
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                  Date & Ref
-                </th>
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                  Method
-                </th>
-                <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                  Amount
-                </th>
-              </tr>
-            </thead>
-            <tbody className="bg-white dark:bg-surface divide-y divide-gray-200 dark:divide-gray-800">
-              {loading ? (
+          {error ? (
+            <div className="p-12 text-center">
+              <div className="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-red-100 dark:bg-red-900/20 mb-4">
+                <AlertCircle className="h-8 w-8 text-red-600 dark:text-red-500" />
+              </div>
+              <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">{error}</h3>
+              <button 
+                onClick={handleManualRefresh}
+                className="inline-flex items-center px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
+              >
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Try Again
+              </button>
+            </div>
+          ) : (
+            <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-800">
+              <thead className="bg-gray-50 dark:bg-gray-900/30">
                 <tr>
-                  <td colSpan="4" className="px-6 py-12 text-center text-gray-500">
-                    Loading transactions...
-                  </td>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    Transaction
+                  </th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    Date & Ref
+                  </th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    Method
+                  </th>
+                  <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    Amount
+                  </th>
                 </tr>
-              ) : filteredTransactions.map((transaction, index) => {
-                const isIncome = transaction.type === 'Income';
-                const formattedAmount = `₹${Number(transaction.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
-
-                return (
-                  <motion.tr 
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: index * 0.05 }}
+              </thead>
+              <tbody className="bg-white dark:bg-surface divide-y divide-gray-200 dark:divide-gray-800">
+                {loading ? (
+                  <tr>
+                    <td colSpan="4" className="px-6 py-12 text-center">
+                      <div className="flex flex-col items-center justify-center">
+                        <RefreshCw className="h-8 w-8 text-primary animate-spin mb-4" />
+                        <p className="text-gray-500 dark:text-gray-400">Loading transactions...</p>
+                      </div>
+                    </td>
+                  </tr>
+                ) : filteredTransactions.map((transaction, index) => (
+                  <TransactionItem 
                     key={transaction.id} 
-                    className="hover:bg-gray-50 dark:hover:bg-gray-800/20 transition-colors"
-                  >
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex items-center">
-                        <div className="flex-shrink-0 h-10 w-10 rounded-xl bg-gray-50 dark:bg-gray-800 flex items-center justify-center border border-gray-200 dark:border-gray-700">
-                          {isIncome ? (
-                            <ArrowDownRight className="h-5 w-5 text-secondary" />
-                          ) : (
-                            <ArrowUpRight className="h-5 w-5 text-gray-400 dark:text-gray-400" />
-                          )}
-                        </div>
-                        <div className="ml-4">
-                          <div className="text-sm font-medium text-gray-900 dark:text-white">{transaction.description}</div>
-                          <div className="text-sm text-gray-500">{transaction.category}</div>
-                        </div>
+                    transaction={transaction} 
+                    index={index} 
+                  />
+                ))}
+                
+                {!loading && !error && filteredTransactions.length === 0 && (
+                  <tr>
+                    <td colSpan="4" className="px-6 py-12 text-center">
+                      <div className="flex flex-col items-center justify-center">
+                        <Search className="h-10 w-10 text-gray-400 dark:text-gray-600 mb-3" />
+                        <p className="text-gray-500 dark:text-gray-400 text-lg">No transactions found</p>
+                        <p className="text-gray-400 dark:text-gray-500 text-sm mt-1">Try adjusting your search or filters.</p>
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-700 dark:text-gray-300">{new Date(transaction.created_at).toLocaleDateString()}</div>
-                      <div className="text-xs text-gray-400 dark:text-gray-500 font-mono">{transaction.reference_id}</div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-500 dark:text-gray-400">Account</div>
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-50 dark:bg-green-500/10 text-green-600 dark:text-green-500 mt-1 border border-green-200 dark:border-green-500/20">
-                        Completed
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right">
-                      <div className={clsx(
-                        "text-sm font-bold",
-                        isIncome ? "text-secondary" : "text-gray-900 dark:text-white"
-                      )}>
-                        {isIncome ? '+' : '-'}{formattedAmount}
-                      </div>
-                    </td>
-                  </motion.tr>
-                );
-              })}
-              
-              {!loading && filteredTransactions.length === 0 && (
-                <tr>
-                  <td colSpan="4" className="px-6 py-12 text-center">
-                    <div className="flex flex-col items-center justify-center">
-                      <Search className="h-10 w-10 text-gray-400 dark:text-gray-600 mb-3" />
-                      <p className="text-gray-500 dark:text-gray-400 text-lg">No transactions found</p>
-                      <p className="text-gray-400 dark:text-gray-500 text-sm mt-1">Try adjusting your search or filters.</p>
-                    </div>
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          )}
         </div>
       </div>
     </div>

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
-import { Building2, PlusCircle, Type } from 'lucide-react';
+import { Building2, PlusCircle, Type, CheckCircle2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 export default function AddAccount() {
@@ -10,6 +10,7 @@ export default function AddAccount() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [success, setSuccess] = useState(false);
   const [formData, setFormData] = useState({
     nickname: '',
     accountType: 'Savings'
@@ -28,7 +29,7 @@ export default function AddAccount() {
         .insert([{
           user_id: user.id,
           account_number: accountNumber,
-          balance: 0,
+          balance: 50000,
           account_type: formData.accountType,
           nickname: formData.nickname || `${formData.accountType} Account`
         }]);
@@ -36,7 +37,11 @@ export default function AddAccount() {
       if (insertError) throw insertError;
 
       await refreshAccount();
-      navigate('/');
+      setSuccess(true);
+      
+      setTimeout(() => {
+        navigate('/');
+      }, 2500);
     } catch (err) {
       if (err.message && err.message.includes('Lock')) {
         window.location.reload();
@@ -62,12 +67,28 @@ export default function AddAccount() {
       >
         <div className="absolute top-0 right-0 w-64 h-64 bg-primary/5 dark:bg-primary/10 rounded-full blur-3xl -mr-32 -mt-32 pointer-events-none" />
         
-        <form onSubmit={handleSubmit} className="space-y-6 relative z-10">
-          {error && (
-            <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-xl p-4 flex items-start">
-              <span className="block sm:inline">{error}</span>
+        {success ? (
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="text-center py-8 relative z-10"
+          >
+            <div className="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-green-100 dark:bg-green-900/30 mb-4">
+              <CheckCircle2 className="h-8 w-8 text-green-600 dark:text-green-400" />
             </div>
-          )}
+            <h3 className="text-xl font-bold text-gray-900 dark:text-white mb-2">Account Created Successfully!</h3>
+            <div className="inline-block bg-primary/10 border border-primary/20 rounded-xl px-4 py-2 mb-4 mt-2">
+              <p className="text-primary font-bold text-lg">Starting Balance: ₹50,000</p>
+            </div>
+            <p className="text-gray-500 dark:text-gray-400 text-sm">Redirecting to dashboard...</p>
+          </motion.div>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-6 relative z-10">
+            {error && (
+              <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-xl p-4 flex items-start">
+                <span className="block sm:inline">{error}</span>
+              </div>
+            )}
 
           <div>
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
@@ -133,6 +154,7 @@ export default function AddAccount() {
             </button>
           </div>
         </form>
+        )}
       </motion.div>
     </div>
   );

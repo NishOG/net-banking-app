@@ -53,7 +53,7 @@ export default function BillPayments() {
     }
 
     if (amountNum > Number(account.balance)) {
-      setError('Insufficient funds.');
+      setError('Insufficient balance');
       setLoading(false);
       return;
     }
@@ -66,7 +66,7 @@ export default function BillPayments() {
         .update({ balance: newBalance })
         .eq('id', account.id);
 
-      if (deductError) throw new Error('Failed to process payment.');
+      if (deductError) throw new Error('Payment failed');
 
       // Record transaction
       const refId = 'BIL' + Math.floor(100000000 + Math.random() * 900000000);
@@ -78,7 +78,9 @@ export default function BillPayments() {
         amount: amountNum,
         description: `${selectedCategory.name} Bill Payment - ${billerDetails.accountNo}`,
         category: 'Utility',
-        reference_id: refId
+        reference_id: refId,
+        from_account: account.account_number,
+        to_account: billerDetails.accountNo
       };
 
       const { error: txError } = await supabase.from('transactions').insert(tx);
