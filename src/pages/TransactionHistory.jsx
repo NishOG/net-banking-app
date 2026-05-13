@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { Search, Filter, ArrowUpRight, ArrowDownRight, Download, RefreshCw, AlertCircle } from 'lucide-react';
 import clsx from 'clsx';
@@ -80,8 +80,8 @@ export default function TransactionHistory() {
         
         if (fetchError) throw fetchError;
         if (isMounted) setTransactions(data || []);
-      } catch (err) {
-        if (isMounted) setError("Failed to load transactions. Please try again.");
+    } catch {
+      setError("Failed to load transactions. Please try again.");
       } finally {
         if (isMounted) setLoading(false);
       }
@@ -90,7 +90,9 @@ export default function TransactionHistory() {
     if (accountNumber) {
       fetchData();
     } else {
-      setLoading(false);
+      setTimeout(() => {
+        if (isMounted) setLoading(false);
+      }, 0);
     }
     
     return () => { isMounted = false; };
@@ -109,7 +111,7 @@ export default function TransactionHistory() {
       
       if (fetchError) throw fetchError;
       setTransactions(data || []);
-    } catch (err) {
+    } catch {
       setError("Failed to load transactions. Please try again.");
     } finally {
       setLoading(false);

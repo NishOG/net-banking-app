@@ -1,4 +1,6 @@
+import { useState, useEffect } from 'react';
 import { Outlet, Link, useLocation, useNavigate } from 'react-router-dom';
+import { motion, AnimatePresence } from 'framer-motion';
 import { 
   LayoutDashboard, 
   Send, 
@@ -11,7 +13,9 @@ import {
   Handshake,
   Headphones,
   HelpCircle,
-  Settings
+  Settings,
+  CheckCircle2,
+  X
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { useAuth } from '../contexts/AuthContext';
@@ -31,16 +35,85 @@ const NAVIGATION = [
 export default function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { displayName } = useAuth();
+  const { user, accounts, displayName } = useAuth();
   const { isDarkMode, toggleTheme } = useTheme();
+  const [notification, setNotification] = useState(null);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
     navigate('/login');
   };
 
+  // Real-time Payment Link Notifications
+  useEffect(() => {
+    if (!user || !accounts || accounts.length === 0) return;
+
+    const accountNumbers = accounts.map(a => a.account_number);
+    
+    const channel = supabase
+      .channel('payment_links_notifications')
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'payment_links'
+        },
+        (payload) => {
+          const isPaid = payload.new.status === 'paid' && payload.old.status !== 'paid';
+          const isOurAccount = accountNumbers.includes(payload.new.sender_account);
+          
+          if (isPaid && isOurAccount) {
+            setNotification({
+              id: Date.now(),
+              amount: payload.new.amount,
+              account: payload.new.sender_account
+            });
+            
+            // Auto hide after 10 seconds
+            setTimeout(() => setNotification(null), 10000);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user, accounts]);
+
   return (
     <div className="flex h-screen bg-gray-50 dark:bg-background overflow-hidden transition-colors duration-200">
+      {/* Toast Notification */}
+      <AnimatePresence>
+        {notification && (
+          <motion.div
+            initial={{ opacity: 0, y: -20, x: '-50%' }}
+            animate={{ opacity: 1, y: 20, x: '-50%' }}
+            exit={{ opacity: 0, y: -20, x: '-50%' }}
+            className="fixed top-0 left-1/2 z-[100] w-full max-w-sm px-4"
+          >
+            <div className="bg-white dark:bg-surface border border-green-100 dark:border-green-500/20 shadow-2xl rounded-2xl p-4 flex items-center gap-4">
+              <div className="bg-green-500 rounded-full p-2 flex-shrink-0">
+                <CheckCircle2 className="h-5 w-5 text-white" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-bold text-gray-900 dark:text-white">Payment Received!</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  ₹{Number(notification.amount).toLocaleString('en-IN')} received in account ..{notification.account.slice(-4)}
+                </p>
+              </div>
+              <button 
+                onClick={() => setNotification(null)}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-white transition-colors"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Sidebar */}
       <aside className="w-64 bg-white dark:bg-surface border-r border-gray-200 dark:border-gray-800 hidden md:flex flex-col transition-colors duration-200">
         <div className="h-16 flex items-center justify-between px-6 border-b border-gray-200 dark:border-gray-800">

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Send, User, FileText, CheckCircle2, ScanLine, X, Loader2 } from 'lucide-react';
+import { Send, User, FileText, CheckCircle2, ScanLine, X, Loader2, QrCode, Share2, Copy, ShieldCheck } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
 import { Html5QrcodeScanner } from 'html5-qrcode';
 import { Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
@@ -22,7 +23,13 @@ export default function FundTransfer() {
   const [recipientInfo, setRecipientInfo] = useState(null);
   const [isVerifying, setIsVerifying] = useState(false);
   const [recentRecipients, setRecentRecipients] = useState([]);
+  const [activeTab, setActiveTab] = useState('send'); // 'send' or 'receive'
+  const [copySuccess, setCopySuccess] = useState(false);
+  const [payLinkAmount, setPayLinkAmount] = useState('');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generatedLink, setGeneratedLink] = useState(null);
 
+  // Optimized Account Lookup
   useEffect(() => {
     const verifyAccount = async () => {
       const accNum = formData.recipientAccount.trim();
@@ -32,15 +39,13 @@ export default function FundTransfer() {
         try {
           const { data, error: fetchError } = await supabase
             .from('accounts')
-            .select('nickname, account_type')
+            .select('*')
             .eq('account_number', accNum)
             .single();
-          
-          if (fetchError || !data) {
-            setRecipientInfo(null);
-            setError('Account not found');
-          } else {
+          if (!fetchError && data) {
             setRecipientInfo(data);
+          } else {
+            setRecipientInfo(null);
           }
         } catch {
           setRecipientInfo(null);
@@ -51,7 +56,6 @@ export default function FundTransfer() {
         setRecipientInfo(null);
       }
     };
-
     const timer = setTimeout(verifyAccount, 500);
     return () => clearTimeout(timer);
   }, [formData.recipientAccount]);
@@ -63,28 +67,17 @@ export default function FundTransfer() {
         qrbox: { width: 250, height: 250 },
         aspectRatio: 1.0,
       }, false);
-      
       scanner.render((decodedText) => {
-        // Support qubix:ACCOUNT:AMOUNT format
         if (decodedText.startsWith('qubix:')) {
           const [, account, amount] = decodedText.split(':');
-          setFormData(prev => ({ 
-            ...prev, 
-            recipientAccount: account || '', 
-            amount: amount || prev.amount 
-          }));
+          setFormData(prev => ({ ...prev, recipientAccount: account || '', amount: amount || prev.amount }));
         } else {
           setFormData(prev => ({ ...prev, recipientAccount: decodedText }));
         }
         setShowScanner(false);
         scanner.clear();
-      }, () => {
-        // Ignore scan errors
-      });
-
-      return () => {
-        scanner.clear().catch(console.error);
-      };
+      }, () => {});
+      return () => { scanner.clear().catch(console.error); };
     }
   }, [showScanner]);
 
@@ -96,161 +89,83 @@ export default function FundTransfer() {
     const amountNum = Number(formData.amount);
     const recipientAccNum = formData.recipientAccount.trim();
 
-    if (amountNum <= 0) {
-      setError('Invalid amount');
-      setLoading(false);
-      return;
-    }
+    if (amountNum <= 0) { setError('Invalid amount'); setLoading(false); return; }
+    if (recipientAccNum.length !== 10) { setError('Invalid account number'); setLoading(false); return; }
+    if (!account) { setError('Sender account not found'); setLoading(false); return; }
+    if (amountNum > Number(account.balance)) { setError('Insufficient balance'); setLoading(false); return; }
 
-    if (recipientAccNum.length !== 10) {
-      setError('Account not found');
-      setLoading(false);
-      return;
-    }
+    // TIMEOUT WRAPPER (5 SECONDS)
+    const transferPromise = supabase.rpc('transfer_funds_fast', {
+      p_sender_account: account.account_number,
+      p_recipient_account: recipientAccNum,
+      p_amount: amountNum,
+      p_remarks: formData.remarks || 'P2P Transfer'
+    });
 
-    if (!account) {
-      setError('Account not found');
-      setLoading(false);
-      return;
-    }
-
-    if (amountNum > Number(account.balance)) {
-      setError('Insufficient balance');
-      setLoading(false);
-      return;
-    }
-
-    if (recipientAccNum === account.account_number) {
-      // Allow internal transfer but skip the recipient check logic since we already have the account
-    }
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('TIMEOUT')), 5000)
+    );
 
     try {
-      // b) Recipient account exists in database
-      const { data: recipientAcc, error: recipientError } = await supabase
-        .from('accounts')
-        .select('*')
-        .eq('account_number', recipientAccNum)
-        .single();
+      // Race the transfer against the 5s timeout
+      const result = await Promise.race([transferPromise, timeoutPromise]);
+      const { data, error: rpcError } = result;
 
-      if (recipientError || !recipientAcc) {
-        throw new Error('Account not found');
-      }
+      if (rpcError) throw rpcError;
+      if (data?.status === 'error') throw new Error(data.message);
 
       const refId = 'TRX' + Math.floor(100000000 + Math.random() * 900000000);
       setReferenceId(refId);
-
-      const newSenderBalance = Number(account.balance) - amountNum;
-      const newRecipientBalance = Number(recipientAcc.balance) + amountNum;
-
-      // 3. Execute transfer instantly via RPC (Bypasses RLS using SECURITY DEFINER)
-      const { data: rpcData, error: rpcError } = await supabase.rpc('transfer_funds', {
-        p_sender_account: account.account_number,
-        p_recipient_account: recipientAccNum,
-        p_amount: amountNum
-      });
-
-      if (rpcError) throw new Error(rpcError.message);
-      if (rpcData?.status === 'error') throw new Error(rpcData.message);
-
-      // 3. Fire off notifications and background tasks without blocking the UI
-      supabase
-        .from('users')
-        .select('email')
-        .eq('id', recipientAcc.user_id)
-        .single()
-        .then(({ data: recipientUser }) => {
-          supabase.functions.invoke('send-transaction-email', {
-            body: {
-              senderEmail: user.email,
-              recipientEmail: recipientUser?.email,
-              recipientAccountNumber: formData.recipientAccount,
-              amount: amountNum,
-              senderBalance: newSenderBalance,
-              recipientBalance: newRecipientBalance,
-              date: new Date().toLocaleString(),
-              referenceId: refId
-            }
-          }).catch(console.error);
-        })
-        .catch(console.error);
-
-      // Refresh sender account balance in background
+      
+      // Refresh balance in background
       refreshAccount();
       
-      // Hook into Auto-Repay
-      processAutoRepayment(formData.recipientAccount, '');
-
+      // Auto-repay trigger
+      processAutoRepayment(recipientAccNum, '');
+      
       setStep(2);
     } catch (err) {
-      setError(err.message || 'Transfer failed');
+      if (err.message === 'TIMEOUT') {
+        setError('Transfer is taking longer than expected. Please check your transaction history in a moment.');
+      } else {
+        setError(err.message || 'Transfer failed');
+      }
     } finally {
       setLoading(false);
     }
+  };
+
+  const generatePaymentLink = async () => {
+    if (!account) return;
+    setIsGenerating(true);
+    try {
+      const expiresAt = new Date();
+      expiresAt.setHours(expiresAt.getHours() + 24);
+      const { data, error } = await supabase.from('payment_links').insert({
+        sender_account: account.account_number,
+        amount: payLinkAmount ? Number(payLinkAmount) : null,
+        expires_at: expiresAt.toISOString(),
+        status: 'pending'
+      }).select().single();
+      if (error) throw error;
+      setGeneratedLink({ ...data, url: `${window.location.origin}/pay?id=${data.id}` });
+    } catch (err) { setError('Failed to generate link'); } finally { setIsGenerating(false); }
   };
 
   const handleReset = () => {
     setFormData({ recipientAccount: '', amount: '', remarks: '' });
     setError(null);
     setStep(1);
+    setGeneratedLink(null);
   };
 
-  useEffect(() => {
-    const fetchRecent = async () => {
-      try {
-        if (!user || !account?.account_number) return;
-        const { data } = await supabase
-          .from('transactions')
-          .select('to_account, created_at')
-          .eq('from_account', account.account_number)
-          .order('created_at', { ascending: false });
-        
-        if (data) {
-          const unique = [...new Set(data.map(t => t.to_account))]
-            .filter(acc => acc && acc !== account.account_number)
-            .slice(0, 5);
-          setRecentRecipients(unique);
-        }
-      } catch (err) {
-        console.error("Error fetching recent recipients:", err);
-      }
-    };
-    fetchRecent();
-  }, [user, account?.account_number]);
-
-  // Loading state
-  if (authLoading && !account) {
-    return (
-      <div className="flex items-center justify-center min-h-[400px]">
-        <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
-      </div>
-    );
-  }
-
-  // No accounts case
-  if (!authLoading && accounts && accounts.length === 0) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[400px] text-center">
-        <div className="bg-white dark:bg-surface rounded-3xl p-10 border border-gray-200 dark:border-gray-800 shadow-xl max-w-md">
-          <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-4">No Accounts Found</h2>
-          <p className="text-gray-500 dark:text-gray-400 mb-8">
-            You need to create an account before you can transfer funds.
-          </p>
-          <Link 
-            to="/add-account"
-            className="inline-flex items-center justify-center px-6 py-4 border border-transparent rounded-xl shadow-sm text-base font-medium text-white bg-primary hover:bg-primary/90 transition-all w-full"
-          >
-            Create Your First Account
-          </Link>
-        </div>
-      </div>
-    );
-  }
+  if (authLoading && !account) return <div className="flex items-center justify-center min-h-[400px]"><Loader2 className="animate-spin text-primary" /></div>;
 
   return (
-    <div className="max-w-2xl mx-auto">
+    <div className="max-w-2xl mx-auto pb-12">
       <div className="mb-8">
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Fund Transfer</h1>
-        <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">Send money securely to any account.</p>
+        <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">Send or receive money securely.</p>
         {account && (
           <p className="text-gray-700 dark:text-gray-300 text-sm mt-2 font-medium">
             Available Balance: ₹{Number(account.balance).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
@@ -258,247 +173,154 @@ export default function FundTransfer() {
         )}
       </div>
 
-      <div className="bg-white dark:bg-surface rounded-2xl border border-gray-200 dark:border-gray-800/60 shadow-sm dark:shadow-xl overflow-hidden relative">
-        <div className="absolute top-0 left-0 w-full h-1 bg-gray-100 dark:bg-gray-800">
-          <motion.div 
-            className="h-full bg-primary"
-            initial={{ width: '50%' }}
-            animate={{ width: step === 1 ? '50%' : '100%' }}
-          />
-        </div>
-
-        {step === 1 ? (
-          <motion.div 
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            className="p-8"
-          >
-            <form onSubmit={handleTransfer} className="space-y-6">
-              {error && (
-                <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-xl p-4">
-                  {error}
-                </div>
-              )}
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex justify-between items-center">
-                  <span>Recipient Account Number</span>
-                  <button 
-                    type="button"
-                    onClick={() => setShowScanner(true)}
-                    className="text-primary hover:text-primary/80 flex items-center text-xs font-medium"
-                  >
-                    <ScanLine className="h-4 w-4 mr-1" />
-                    Scan & Pay
-                  </button>
-                </label>
-
-                {/* Quick Select for Own Accounts */}
-                {accounts && accounts.length > 1 && account && (
-                  <div className="mb-4">
-                    <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-2 font-bold">Your Other Accounts</p>
-                    <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
-                      {accounts.filter(acc => acc.id !== account.id).map(acc => (
-                        <button
-                          key={acc.id}
-                          type="button"
-                          onClick={() => setFormData({ ...formData, recipientAccount: acc.account_number })}
-                          className={`flex-none px-4 py-2 rounded-xl text-xs font-medium transition-all border ${
-                            formData.recipientAccount === acc.account_number 
-                              ? 'bg-primary/10 border-primary text-primary' 
-                              : 'bg-gray-50 dark:bg-gray-900/50 border-gray-200 dark:border-gray-800 text-gray-500 hover:border-gray-300 dark:hover:border-gray-700'
-                          }`}
-                        >
-                          {acc.nickname || acc.account_type} (..{acc.account_number.slice(-4)})
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Recent Recipients */}
-                {recentRecipients && recentRecipients.length > 0 && (
-                  <div className="mb-4">
-                    <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-2 font-bold">Recent Recipients</p>
-                    <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
-                      {recentRecipients.map(acc => (
-                        <button
-                          key={acc}
-                          type="button"
-                          onClick={() => setFormData({ ...formData, recipientAccount: acc })}
-                          className={`flex-none px-4 py-2 rounded-xl text-xs font-medium transition-all border ${
-                            formData.recipientAccount === acc 
-                              ? 'bg-secondary/10 border-secondary text-secondary' 
-                              : 'bg-gray-50 dark:bg-gray-900/50 border-gray-200 dark:border-gray-800 text-gray-500 hover:border-gray-300 dark:hover:border-gray-700'
-                          }`}
-                        >
-                          Account ..{acc.slice(-4)}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                <div className="relative rounded-xl shadow-sm">
-                  <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                    <User className="h-5 w-5 text-gray-400 dark:text-gray-500" />
-                  </div>
-                  <input
-                    type="text"
-                    required
-                    value={formData.recipientAccount}
-                    onChange={(e) => setFormData({...formData, recipientAccount: e.target.value})}
-                    className="block w-full pl-11 pr-4 py-3 bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-primary focus:border-transparent text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 transition-all"
-                    placeholder="Enter 10-digit account number"
-                  />
-                  {isVerifying && (
-                    <div className="absolute inset-y-0 right-0 pr-4 flex items-center">
-                      <Loader2 className="h-4 w-4 text-primary animate-spin" />
-                    </div>
-                  )}
-                </div>
-                {recipientInfo && (
-                  <motion.div 
-                    initial={{ opacity: 0, y: -5 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="mt-2 flex items-center text-xs font-medium text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-500/10 px-3 py-1.5 rounded-lg border border-green-100 dark:border-green-500/20"
-                  >
-                    <CheckCircle2 className="h-3.5 w-3.5 mr-1.5" />
-                    Recipient: {recipientInfo.nickname || `${recipientInfo.account_type} Account`}
-                  </motion.div>
-                )}
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Amount (₹)
-                </label>
-                <div className="relative rounded-xl shadow-sm">
-                  <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
-                    <span className="text-gray-400 dark:text-gray-500 font-medium">₹</span>
-                  </div>
-                  <input
-                    type="number"
-                    min="1"
-                    step="0.01"
-                    required
-                    value={formData.amount}
-                    onChange={(e) => setFormData({...formData, amount: e.target.value})}
-                    className="block w-full pl-11 pr-4 py-3 bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-primary focus:border-transparent text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 transition-all font-mono text-lg"
-                    placeholder="0.00"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Remarks (Optional)
-                </label>
-                <div className="relative rounded-xl shadow-sm">
-                  <div className="absolute inset-y-0 left-0 pl-4 pt-3 pointer-events-none">
-                    <FileText className="h-5 w-5 text-gray-400 dark:text-gray-500" />
-                  </div>
-                  <textarea
-                    rows={3}
-                    value={formData.remarks}
-                    onChange={(e) => setFormData({...formData, remarks: e.target.value})}
-                    className="block w-full pl-11 pr-4 py-3 bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-primary focus:border-transparent text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 transition-all resize-none"
-                    placeholder="What is this for?"
-                  />
-                </div>
-              </div>
-
-              <div className="pt-4">
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="w-full flex justify-center items-center py-4 px-4 border border-transparent rounded-xl shadow-sm text-base font-medium text-white bg-primary hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-surface focus:ring-primary transition-all disabled:opacity-70 group"
-                >
-                  {loading ? (
-                    <span className="flex items-center">
-                      <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin mr-3" />
-                      Transfer processing...
-                    </span>
-                  ) : (
-                    <span className="flex items-center">
-                      <Send className="mr-2 h-5 w-5 group-hover:-translate-y-1 group-hover:translate-x-1 transition-transform" />
-                      Transfer Funds
-                    </span>
-                  )}
-                </button>
-              </div>
-            </form>
-          </motion.div>
-        ) : (
-          <motion.div 
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="p-12 text-center"
-          >
-            <div className="mx-auto flex items-center justify-center h-24 w-24 rounded-full bg-secondary/10 mb-6 relative">
-              <div className="absolute inset-0 bg-secondary/20 rounded-full animate-ping" />
-              <CheckCircle2 className="h-12 w-12 text-secondary relative z-10" />
-            </div>
-            <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">Transfer successful</h2>
-            <p className="text-gray-500 dark:text-gray-400 mb-8">
-              ₹{parseFloat(formData.amount).toLocaleString('en-IN', { minimumFractionDigits: 2 })} has been successfully sent to account {formData.recipientAccount}.
-            </p>
-            <div className="bg-gray-50 dark:bg-gray-900/50 rounded-xl p-4 mb-8 text-left border border-gray-200 dark:border-gray-800">
-              <div className="flex justify-between py-2 border-b border-gray-200 dark:border-gray-800/60">
-                <span className="text-gray-500 dark:text-gray-400 text-sm">Reference ID</span>
-                <span className="text-gray-900 dark:text-white font-mono text-sm">{referenceId}</span>
-              </div>
-              <div className="flex justify-between py-2">
-                <span className="text-gray-500 dark:text-gray-400 text-sm">Date & Time</span>
-                <span className="text-gray-900 dark:text-white text-sm">{new Date().toLocaleString()}</span>
-              </div>
-            </div>
-            <button
-              onClick={handleReset}
-              className="px-6 py-3 bg-gray-200 hover:bg-gray-300 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-900 dark:text-white rounded-xl font-medium transition-colors"
-            >
-              Make Another Transfer
-            </button>
-          </motion.div>
-        )}
+      <div className="flex p-1 bg-gray-100 dark:bg-gray-900/50 rounded-2xl mb-6 max-w-sm">
+        <button onClick={() => setActiveTab('send')} className={`flex-1 flex items-center justify-center py-2.5 rounded-xl text-sm font-bold transition-all ${activeTab === 'send' ? 'bg-white dark:bg-surface text-primary shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+          <Send className="h-4 w-4 mr-2" /> Send Money
+        </button>
+        <button onClick={() => setActiveTab('receive')} className={`flex-1 flex items-center justify-center py-2.5 rounded-xl text-sm font-bold transition-all ${activeTab === 'receive' ? 'bg-white dark:bg-surface text-primary shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+          <QrCode className="h-4 w-4 mr-2" /> Receive Money
+        </button>
       </div>
 
-      {/* QR Scanner Modal */}
-      <AnimatePresence>
-        {showScanner && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
-          >
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="bg-white dark:bg-surface rounded-3xl shadow-2xl max-w-sm w-full relative flex flex-col items-center overflow-hidden"
-            >
-              <div className="w-full p-4 border-b border-gray-200 dark:border-gray-800 flex justify-between items-center">
-                <h3 className="font-bold text-gray-900 dark:text-white flex items-center">
-                  <ScanLine className="h-5 w-5 mr-2 text-primary" />
-                  Scan QR Code
-                </h3>
-                <button 
-                  onClick={() => setShowScanner(false)}
-                  className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-white transition-colors rounded-full hover:bg-gray-100 dark:hover:bg-gray-800"
-                >
-                  <X className="h-5 w-5" />
-                </button>
+      <AnimatePresence mode="wait">
+        {activeTab === 'send' ? (
+          <motion.div key="send" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="bg-white dark:bg-surface rounded-3xl border border-gray-200 dark:border-gray-800 shadow-sm overflow-hidden relative">
+            <div className="absolute top-0 left-0 w-full h-1 bg-gray-100 dark:bg-gray-800">
+              <motion.div className="h-full bg-primary" initial={{ width: '50%' }} animate={{ width: step === 1 ? '50%' : '100%' }} />
+            </div>
+
+            {step === 1 ? (
+              <div className="p-8">
+                <form onSubmit={handleTransfer} className="space-y-6">
+                  {error && <div className="bg-danger/10 border border-danger/20 text-danger text-sm rounded-xl p-4 font-medium">{error}</div>}
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2 flex justify-between">
+                      <span>Recipient Account Number</span>
+                      <button type="button" onClick={() => setShowScanner(true)} className="text-primary text-xs font-bold flex items-center"><ScanLine className="h-4 w-4 mr-1" /> Scan</button>
+                    </label>
+                    <div className="relative">
+                      <User className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+                      <input
+                        type="text"
+                        required
+                        value={formData.recipientAccount}
+                        onChange={(e) => setFormData({...formData, recipientAccount: e.target.value})}
+                        className="block w-full pl-11 pr-12 py-3.5 bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-primary text-gray-900 dark:text-white"
+                        placeholder="10-digit Account Number"
+                      />
+                      {isVerifying && <Loader2 className="absolute right-4 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-primary" />}
+                    </div>
+                    {recipientInfo && (
+                      <motion.div initial={{ opacity: 0, y: -5 }} animate={{ opacity: 1, y: 0 }} className="mt-3 flex items-center text-xs font-bold text-green-600 bg-green-50 dark:bg-green-500/10 p-3 rounded-xl border border-green-100">
+                        <CheckCircle2 className="h-4 w-4 mr-2" />
+                        Recipient: {recipientInfo.nickname} ({recipientInfo.account_type})
+                      </motion.div>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Amount (₹)</label>
+                    <div className="relative">
+                      <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold">₹</span>
+                      <input
+                        type="number"
+                        required
+                        value={formData.amount}
+                        onChange={(e) => setFormData({...formData, amount: e.target.value})}
+                        className="block w-full pl-8 pr-4 py-3.5 bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-primary text-gray-900 dark:text-white font-mono text-lg"
+                        placeholder="0.00"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="relative">
+                    <FileText className="absolute left-4 top-4 h-5 w-5 text-gray-400" />
+                    <textarea
+                      value={formData.remarks}
+                      onChange={(e) => setFormData({...formData, remarks: e.target.value})}
+                      className="block w-full pl-11 pr-4 py-3.5 bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-primary text-gray-900 dark:text-white resize-none"
+                      placeholder="Remarks (Optional)"
+                      rows={2}
+                    />
+                  </div>
+
+                  <button disabled={loading} type="submit" className="w-full py-4 bg-primary text-white rounded-xl font-bold shadow-lg shadow-primary/20 hover:bg-primary/90 transition-all disabled:opacity-50">
+                    {loading ? (
+                      <div className="flex items-center justify-center">
+                        <Loader2 className="animate-spin h-5 w-5 mr-3" />
+                        Processing...
+                      </div>
+                    ) : "Transfer Funds"}
+                  </button>
+                </form>
               </div>
-              <div className="w-full p-4 bg-gray-50 dark:bg-gray-900/50">
-                <div id="qr-reader" className="w-full rounded-xl overflow-hidden border-none shadow-sm bg-white dark:bg-surface"></div>
-                <p className="text-xs text-center text-gray-500 mt-4">
-                  Position the QR code inside the frame to scan.
-                </p>
+            ) : (
+              <div className="p-12 text-center">
+                <div className="mx-auto flex items-center justify-center h-20 w-20 rounded-full bg-green-100 dark:bg-green-500/20 mb-6 shadow-inner">
+                  <CheckCircle2 className="h-10 w-10 text-green-600" />
+                </div>
+                <h2 className="text-2xl font-bold text-gray-900 dark:text-white mb-2 tracking-tight">Transfer Successful</h2>
+                <p className="text-gray-500 mb-8 font-medium">₹{parseFloat(formData.amount).toLocaleString('en-IN')} sent to {formData.recipientAccount}</p>
+                <div className="bg-gray-50 dark:bg-gray-900/50 rounded-2xl p-6 mb-8 text-left text-sm space-y-3 border border-gray-100 dark:border-gray-800">
+                  <div className="flex justify-between items-center"><span className="text-gray-400 font-bold uppercase text-[10px]">Reference ID</span><span className="font-mono font-bold">{referenceId}</span></div>
+                  <div className="h-px bg-gray-100 dark:bg-gray-800 w-full" />
+                  <div className="flex justify-between items-center"><span className="text-gray-400 font-bold uppercase text-[10px]">Date</span><span className="font-bold">{new Date().toLocaleString()}</span></div>
+                </div>
+                <button onClick={handleReset} className="w-full py-4 bg-gray-100 dark:bg-gray-800 rounded-xl font-bold hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">Done</button>
               </div>
-            </motion.div>
+            )}
+          </motion.div>
+        ) : (
+          <motion.div key="receive" className="bg-white dark:bg-surface rounded-3xl border border-gray-200 dark:border-gray-800 p-8 text-center shadow-sm">
+            {!generatedLink ? (
+              <div className="space-y-6">
+                <div className="flex flex-col items-center">
+                  <div className="w-16 h-16 bg-primary/10 rounded-2xl flex items-center justify-center mb-4">
+                    <QrCode className="h-8 w-8 text-primary" />
+                  </div>
+                  <h3 className="text-xl font-bold">Receive Money</h3>
+                  <p className="text-sm text-gray-500">Generate a payment link to get paid instantly.</p>
+                </div>
+                <div className="relative">
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold">₹</span>
+                  <input type="number" value={payLinkAmount} onChange={e => setPayLinkAmount(e.target.value)} className="block w-full pl-8 p-3.5 bg-gray-50 dark:bg-gray-900 rounded-xl border border-gray-200" placeholder="Amount (Optional)" />
+                </div>
+                <button onClick={generatePaymentLink} disabled={isGenerating} className="w-full py-4 bg-primary text-white rounded-xl font-bold shadow-lg shadow-primary/20">{isGenerating ? "Generating..." : "Get Payment Link"}</button>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                <div className="p-6 bg-white rounded-3xl inline-block shadow-inner border border-gray-50">
+                  <QRCodeSVG value={generatedLink.url} size={200} />
+                </div>
+                <div className="flex items-center gap-2 bg-gray-50 dark:bg-gray-900 p-3 rounded-xl border border-gray-100 dark:border-gray-800">
+                  <p className="text-xs truncate flex-1 text-left font-medium opacity-60">{generatedLink.url}</p>
+                  <button onClick={() => { navigator.clipboard.writeText(generatedLink.url); setCopySuccess(true); setTimeout(() => setCopySuccess(false), 2000); }} className="p-2 text-primary hover:bg-primary/5 rounded-lg">{copySuccess ? <CheckCircle2 className="h-4 w-4" /> : <Copy className="h-4 w-4" />}</button>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <button onClick={() => setGeneratedLink(null)} className="py-4 bg-gray-100 dark:bg-gray-800 rounded-xl font-bold">Back</button>
+                  <button onClick={() => { if(navigator.share) navigator.share({title: 'Qubix Bank Pay', url: generatedLink.url}); }} className="py-4 bg-primary text-white rounded-xl font-bold shadow-lg shadow-primary/20 flex items-center justify-center"><Share2 className="h-4 w-4 mr-2" /> Share</button>
+                </div>
+              </div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
+
+      {showScanner && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-white dark:bg-surface rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl">
+            <div className="p-4 border-b flex justify-between items-center">
+              <h3 className="font-bold flex items-center"><ScanLine className="h-5 w-5 mr-2 text-primary" /> Scan QR Code</h3>
+              <button onClick={() => setShowScanner(false)} className="p-2 hover:bg-gray-100 rounded-full"><X className="h-5 w-5" /></button>
+            </div>
+            <div className="p-4 bg-gray-50">
+              <div id="qr-reader" className="w-full rounded-2xl overflow-hidden bg-white shadow-sm border-2 border-dashed border-gray-200"></div>
+              <p className="text-center text-xs text-gray-500 mt-4">Place the QR code within the frame</p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

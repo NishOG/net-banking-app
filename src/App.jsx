@@ -21,6 +21,7 @@ import Loans from './pages/Loans';
 import AddAccount from './pages/AddAccount';
 import Support from './pages/Support';
 import Settings from './pages/Settings';
+import PaymentPortal from './pages/PaymentPortal';
 
 function App() {
   return (
@@ -32,6 +33,8 @@ function App() {
             {/* Public Routes */}
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
+            <Route path="/pay/:accountNumber" element={<PaymentPortal />} />
+            <Route path="/pay" element={<PaymentPortal />} />
 
             {/* Protected Routes */}
             <Route element={<ProtectedRoute />}>
