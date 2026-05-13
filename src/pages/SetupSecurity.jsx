@@ -53,11 +53,14 @@ export default function SetupSecurity() {
       if (dbError) throw dbError;
       
       // Save device
-      await supabase.from('devices').insert({
+      const { error: deviceError } = await supabase.from('devices').insert({
         user_id: user.id,
         device_name: navigator.userAgent.split(') ')[0].split('(')[1] || 'Web Browser',
         last_active: new Date().toISOString()
-      }).catch(e => console.log('Device insert failed, table might not exist yet', e));
+      });
+      if (deviceError) {
+        console.log('Device insert failed, table might not exist yet', deviceError);
+      }
 
       localStorage.setItem('has_pin', 'true');
       setStep(2); // Move to Face ID setup
